@@ -1,0 +1,12 @@
+# How the BigWigs packager builds the release zip (see .github/workflows/release.yml).
+# Players get only the addon: the .toc, the Lua file, LICENSE.
+package-as: SleepingBagReminder
+
+# Release notes come from this hand-written file, not commit messages.
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - .github
+  - README.md
