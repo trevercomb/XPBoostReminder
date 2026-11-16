@@ -58,20 +58,20 @@ local function Remaining(fn, ...)
 end
 
 -- Seconds left (0 when ready), or nil if the bag isn't in your bags or no source answered.
--- Checks the bag slot (what the tooltip shows) plus both item-ID lookups and trusts the longest.
+-- Checks the bag slot (what the tooltip shows) and the item-ID lookup and trusts the longer.
 local function CooldownLeft()
-    local info = bagIndex and C_Container.GetContainerItemInfo(bagIndex, slotIndex)
-    if not info or info.itemID ~= itemID then
+    local ok, info = false, nil
+    if bagIndex then ok, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slotIndex) end
+    if not ok or not info or info.itemID ~= itemID then
         itemID, bagIndex, slotIndex = FindBag()
         if not itemID then return nil end
     end
     local slotLeft = Remaining(C_Container.GetContainerItemCooldown, bagIndex, slotIndex)
     local itemLeft = Remaining(C_Container.GetItemCooldown, itemID)
-    local globalLeft = Remaining(GetItemCooldown, itemID)
     local function fmt(v) return v and (v == math.huge and "paused" or string.format("%.0f", v)) or "-" end
-    lastRaw = "slot " .. fmt(slotLeft) .. "s, item " .. fmt(itemLeft) .. "s, global " .. fmt(globalLeft) .. "s"
+    lastRaw = "slot " .. fmt(slotLeft) .. "s, item " .. fmt(itemLeft) .. "s"
     local left
-    for _, v in ipairs({ slotLeft or -1, itemLeft or -1, globalLeft or -1 }) do
+    for _, v in ipairs({ slotLeft or -1, itemLeft or -1 }) do
         if v >= 0 and (not left or v > left) then left = v end
     end
     return left
@@ -93,21 +93,9 @@ local FULL_STACKS = 3
 local WARN_LEFT = 600 -- seconds of buff left when a full-stack reminder is due
 
 local function ReadWellRested()
-    local stacks, expires
-    local get = C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID
-    local aura = get and get(BUFF_ID)
-    if aura then
-        stacks, expires = aura.applications, aura.expirationTime
-    else
-        for i = 1, 40 do
-            local name, _, count, _, _, expirationTime, _, _, _, spellId = UnitBuff("player", i)
-            if name == nil then break end
-            if spellId == BUFF_ID or name == BUFF_NAME then
-                stacks, expires = count, expirationTime
-                break
-            end
-        end
-    end
+    local aura = C_UnitAuras.GetPlayerAuraBySpellID(BUFF_ID)
+    if not aura then return nil end -- you don't have it
+    local stacks, expires = aura.applications, aura.expirationTime
     if stacks == nil or IsSecret(stacks) or IsSecret(expires) then return nil end
     if stacks == 0 then stacks = 1 end -- a single application reports 0
     local left = (expires and expires > 0) and math.max(0, expires - GetTime()) or math.huge
@@ -187,17 +175,13 @@ end
 
 -- Buff number i: name, spell ID, aura instance ID; nil when there are no more.
 local function BuffAt(i)
-    local auras = C_UnitAuras
-    local getter = auras and (auras.GetBuffDataByIndex or auras.GetAuraDataByIndex)
-    if getter then
-        local aura = getter == auras.GetBuffDataByIndex and getter("player", i)
-            or getter("player", i, "HELPFUL")
-        if aura then return aura.name, aura.spellId, aura.auraInstanceID end
-        return nil
-    end
-    local name, _, _, _, _, _, _, _, _, spellId = UnitBuff("player", i)
-    return name, spellId
+    local get = C_UnitAuras.GetAuraDataByIndex or C_UnitAuras.GetBuffDataByIndex
+    local aura = get("player", i, "HELPFUL")
+    if aura then return aura.name, aura.spellId, aura.auraInstanceID end
 end
+
+local activeXP = {} -- XP buffs you had at the last check
+local wornOff = {}  -- name -> { effect, nextRemind, count, dismissed }
 
 -- Your experience buffs right now, other than Well-Rested, by name: { [name] = effect line }.
 -- By name, so eating a different food for the same "Well Fed" counts as putting it back.
@@ -208,9 +192,19 @@ local function ReadXPBuffs()
         if name == nil then break end
         if not IsSecret(name) and name ~= BUFF_NAME and spellId ~= BUFF_ID then
             local key = (spellId and not IsSecret(spellId)) and spellId or name
-            -- Only remember a "no experience line" answer once the tooltip actually loaded.
-            if xpLineCache[key] == nil then xpLineCache[key] = ExperienceLine(i, instanceID) end
-            if xpLineCache[key] then found[name] = xpLineCache[key] end
+            local line = xpLineCache[key]
+            if line == nil then
+                line = ExperienceLine(i, instanceID)
+                -- Only remember an answer once the tooltip actually loaded.
+                if line ~= nil then xpLineCache[key] = line end
+            end
+            if line then
+                found[name] = line
+            elseif line == nil and activeXP[name] then
+                -- Tooltip not loaded yet (say, a new food's Well Fed): a buff with
+                -- this name was an XP buff a moment ago, so don't call it gone.
+                found[name] = activeXP[name]
+            end
         end
     end
     return found
@@ -222,9 +216,6 @@ local function XPBuffs()
     return ok and found or nil
 end
 
-local activeXP = {} -- XP buffs you had at the last check
-local wornOff = {}  -- name -> { effect, nextRemind, count }
-
 local function WornOffMessage(name, entry)
     local pct = entry.effect:match("(%d+)%%")
     return name .. (pct and (" (+" .. pct .. "% XP)") or "") .. " has worn off. Put it back up!"
@@ -234,7 +225,7 @@ end
 -- you used before the buff appeared (saved per buff name), with a bag search
 -- for food whose tooltip mentions Well Fed and experience as a fallback.
 local LEARN_WINDOW = 90 -- seconds between using an item and its buff appearing
-local lastUsed          -- { id, time } of the last item you used
+local recentUses = {}   -- { id, time } of the last few items you used, newest last
 
 local function ItemCount(id)
     local fn = (C_Item and C_Item.GetItemCount) or GetItemCount
@@ -248,7 +239,10 @@ local function IsConsumable(id)
 end
 
 local function NoteUse(id)
-    if type(id) == "number" and id ~= itemID then lastUsed = { id = id, time = GetTime() } end
+    if type(id) == "number" and id ~= itemID then
+        table.insert(recentUses, { id = id, time = GetTime() })
+        if #recentUses > 5 then table.remove(recentUses, 1) end
+    end
 end
 
 local function ItemIDOf(item)
@@ -271,48 +265,72 @@ end)
 SafeHook(_G, "UseItemByName", function(item) NoteUse(ItemIDOf(item)) end)
 SafeHook(C_Item, "UseItemByName", function(item) NoteUse(ItemIDOf(item)) end)
 
-local foodCache = {} -- item ID -> true if its tooltip mentions Well Fed and experience
+local itemTextCache = {} -- item ID -> its tooltip text, lowercased
 
-local function IsXPFood(bag, slot, id)
-    if foodCache[id] ~= nil then return foodCache[id] end
-    if not IsConsumable(id) then foodCache[id] = false return false end
+-- An item's whole tooltip in lowercase, or nil if it hasn't loaded yet.
+local function ItemText(id)
+    if itemTextCache[id] then return itemTextCache[id] end
     local lines = {}
-    local data = C_TooltipInfo and C_TooltipInfo.GetBagItem and C_TooltipInfo.GetBagItem(bag, slot)
+    local data = C_TooltipInfo and C_TooltipInfo.GetItemByID and C_TooltipInfo.GetItemByID(id)
     if data and data.lines then
         for _, line in ipairs(data.lines) do table.insert(lines, line.leftText) end
     else
         scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
-        scanTip:SetBagItem(bag, slot)
+        scanTip:SetItemByID(id)
         for n = 1, scanTip:NumLines() do
             local line = _G["XPBoostReminderScanTipTextLeft" .. n]
             table.insert(lines, line and line:GetText())
         end
     end
-    if #lines < 2 then return false end -- tooltip didn't load; try again next time
+    if #lines < 2 then return nil end -- not loaded; try again next time
     local text = ""
     for _, line in ipairs(lines) do
         if type(line) == "string" and not IsSecret(line) then text = text .. " " .. line:lower() end
     end
-    foodCache[id] = text:find("well fed") ~= nil and text:find("experience") ~= nil
-    return foodCache[id]
+    itemTextCache[id] = text
+    return text
 end
+
+-- Whether a consumable's tooltip says it gives this buff (by name, e.g. "well
+-- fed") or mentions experience. Keeps a drink used while eating from being
+-- taken for the food.
+local function GivesBuff(id, buffName)
+    if not IsConsumable(id) then return false end
+    local text = ItemText(id)
+    return text ~= nil and (text:find(buffName:lower(), 1, true) ~= nil or text:find("experience", 1, true) ~= nil)
+end
+
+local function IsXPFood(id)
+    local text = IsConsumable(id) and ItemText(id)
+    return text and text:find("well fed", 1, true) ~= nil and text:find("experience", 1, true) ~= nil
+end
+
+local bagFood -- XP food found in your bags: an item ID, false for none, nil to search again
 
 -- The item to click for a worn-off buff, or nil if you have none.
 local function ItemFor(buffName)
     local learned = XPBoostReminderDB.items[buffName]
     if learned and ItemCount(learned) > 0 then return learned end
-    if not buffName:lower():find("well fed") then return nil end
-    local best, bestCount
-    for bag = 0, NUM_BAG_SLOTS or 4 do
-        for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
-            local id = C_Container.GetContainerItemID(bag, slot)
-            if id and not IsSecret(id) and IsXPFood(bag, slot, id) then
-                local count = ItemCount(id)
-                if not best or count > bestCount then best, bestCount = id, count end
+    if not buffName:lower():find("well fed", 1, true) then return nil end
+    if bagFood == nil then
+        local best, bestCount, complete = nil, 0, true
+        for bag = 0, NUM_BAG_SLOTS or 4 do
+            for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+                local id = C_Container.GetContainerItemID(bag, slot)
+                if id and not IsSecret(id) then
+                    if IsConsumable(id) and not ItemText(id) then complete = false end
+                    if IsXPFood(id) then
+                        local count = ItemCount(id)
+                        if not best or count > bestCount then best, bestCount = id, count end
+                    end
+                end
             end
         end
+        -- Remember the answer until your bags change, unless a tooltip was still loading.
+        if best or complete then bagFood = best or false end
+        return best
     end
-    return best
+    return bagFood or nil
 end
 
 local function SafeItemFor(buffName)
@@ -328,10 +346,16 @@ local function UpdateXPBuffs()
     end
     for name in pairs(now) do
         wornOff[name] = nil
-        -- A buff that just appeared after you used a consumable: that's its item.
-        if not activeXP[name] and lastUsed and GetTime() - lastUsed.time <= LEARN_WINDOW
-            and IsConsumable(lastUsed.id) then
-            XPBoostReminderDB.items[name] = lastUsed.id
+        -- A buff that just appeared after you used an item that gives it: that's its item.
+        if not activeXP[name] then
+            for i = #recentUses, 1, -1 do
+                local use = recentUses[i]
+                if GetTime() - use.time > LEARN_WINDOW then break end
+                if GivesBuff(use.id, name) then
+                    XPBoostReminderDB.items[name] = use.id
+                    break
+                end
+            end
         end
     end
     activeXP = now
@@ -465,7 +489,9 @@ local function Check()
     end
 
     local ready = IsReady()
-    if ready ~= nil then
+    if ready == nil then
+        bagDueNow = false -- bag not in your bags (banked, mailed...): no button for it
+    else
         local settled = true
         if ready then
             -- Only believe "ready" once it has held for a few seconds, in case the
@@ -499,6 +525,18 @@ frame:RegisterEvent("PLAYER_UNGHOST")
 frame:RegisterEvent("PLAYER_ALIVE")
 frame:RegisterEvent("BAG_UPDATE_COOLDOWN")
 frame:RegisterEvent("PLAYER_REGEN_DISABLED")
+frame:RegisterEvent("BAG_UPDATE")
+
+local checkQueued = false
+local function QueueCheck()
+    if checkQueued then return end
+    checkQueued = true
+    C_Timer.After(1, function()
+        checkQueued = false
+        Check()
+    end)
+end
+
 frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == ADDON then
@@ -520,10 +558,15 @@ frame:SetScript("OnEvent", function(_, event, arg1)
                 C_Timer.NewTicker(CHECK_EVERY, Check)
             end)
         end
+    elseif event == "BAG_UPDATE" then
+        bagFood = nil -- bags changed: look for XP food again next time
     elseif started then
         -- Bag cooldown changed, combat ended, or you're alive again: check now
         -- (a moment later, so the game has settled) instead of on the next tick.
-        C_Timer.After(1, Check)
+        -- Cooldown updates fire on every global cooldown, so skip them in
+        -- combat (nothing alerts then) and run at most one queued check.
+        if event == "BAG_UPDATE_COOLDOWN" and InCombatLockdown() then return end
+        QueueCheck()
     end
 end)
 
@@ -562,7 +605,9 @@ SlashCmdList.XPBOOSTREMINDER = function(input)
     else
         XPBoostReminderDB.enabled = not XPBoostReminderDB.enabled
         wasDue, readySince, bagDismissed = nil, nil, false
-        wornOff = {}
+        -- Start fresh: buffs gained or lost while off aren't "new" or "worn off".
+        wornOff, recentUses = {}, {}
+        activeXP = XPBuffs() or {}
         Print(XPBoostReminderDB.enabled and "on" or "off")
         if XPBoostReminderDB.enabled then Check() else UpdateButtons() end
     end

@@ -1,5 +1,13 @@
 # XP Boost Reminder changelog
 
+## 1.0.1
+
+- Fixed: eating and drinking together could make the eat button remember your drink instead of your food. It now only remembers an item whose tooltip gives that buff.
+- Fixed: switching to a different XP food could set off a false "Well Fed has worn off" alert.
+- Fixed: the sleeping bag button could stay up after the bag left your bags.
+- Fixed: turning reminders off and back on could remember the wrong item for a buff.
+- Fewer checks during combat, and the bag search for food only reruns when your bags change.
+
 ## 1.0.0
 
 First release. Reminds you to keep your experience buffs up, with a sound, an on-screen warning and a chat line, and never during a fight.
