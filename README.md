@@ -1,21 +1,27 @@
-# Sleeping Bag Reminder
+# XP Boost Reminder
 
-A tiny WoW Forever addon that reminds you to use your **Cozy Sleeping Bag** whenever it's off cooldown.
+A tiny WoW Forever addon that reminds you to keep your experience buffs up. You get a sound, an on-screen warning and a chat line, and it never interrupts a fight: reminders wait until combat ends (or until you're alive again).
 
-Sleeping in the bag gives the Well-Rested buff (up to 3 stacks, 2 hours); the bag's cooldown is 1 hour. You get a sound, an on-screen warning and a chat line:
+## Cozy Sleeping Bag
 
-- **Below 3 stacks, or no buff:** as soon as the bag is off cooldown, so you can build the stacks up.
-- **At 3 stacks:** when the buff has 10 minutes left, so you sleep again and keep the stacks before they run out.
+Sleeping in the bag gives the Well-Rested buff (up to 3 stacks, 2 hours); the bag's cooldown is 1 hour.
 
-It also watches your other experience buffs, such as Well Fed from food that boosts XP: any buff whose tooltip mentions experience. When one wears off (or you lose it by dying), it reminds you to put it back up, up to 3 times, 5 minutes apart.
+- **Below 3 stacks, or no buff:** you're reminded as soon as the bag is off cooldown, so you can build the stacks up.
+- **At 3 stacks:** you're reminded when the buff has 10 minutes left, so you sleep again and keep the stacks before they run out.
 
-It also checks at login, and repeats the bag reminder every 5 minutes until you use the bag. It never interrupts a fight: reminders wait until combat ends.
+It checks at login too, and repeats every 5 minutes until you use the bag.
+
+## Other XP buffs
+
+Any other buff whose tooltip mentions experience, such as Well Fed from food that boosts XP. When one wears off (or you lose it by dying), you're reminded to put it back up, up to 3 times, 5 minutes apart.
 
 ## Commands
 
-- `/sbr`: turn reminders on or off
-- `/sbr test`: play the alert
-- `/sbr status`: whether it's on, the bag's cooldown, your Well-Rested stacks and time left, and your other XP buffs
+- `/xpb`: turn reminders on or off
+- `/xpb test`: play the alerts
+- `/xpb status`: whether it's on, the bag's cooldown, your Well-Rested stacks and time left, and your other XP buffs
+
+`/xpboost` works too.
 
 ## Releasing
 

@@ -1,4 +1,4 @@
-"""Draw Sleeping Bag Reminder's logo (docs/logo.png): a sleeping bag under a
+"""Draw XP Boost Reminder's logo (docs/logo.png): a sleeping bag under a
 crescent moon. Original artwork, no game assets. Run: python tools/make_logo.py"""
 
 from pathlib import Path

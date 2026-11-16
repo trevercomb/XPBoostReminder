@@ -4,7 +4,7 @@ local ITEM_NAME = "Cozy Sleeping Bag"
 local REMIND_EVERY = 300   -- seconds between repeat reminders while it's ready
 local CHECK_EVERY = 5      -- seconds between cooldown checks
 local LOGIN_DELAY = 8      -- let bags and cooldowns load before the first check
-local HEADER = "|cff66ccffSleeping Bag Reminder|r"
+local HEADER = "|cff66ccffXP Boost Reminder|r"
 
 local itemID          -- learned from the bags at runtime
 local nextRemind = 0
@@ -38,7 +38,7 @@ local function FindBag()
 end
 
 local bagIndex, slotIndex  -- where the bag was last seen
-local lastRaw = "none yet" -- raw cooldown values, for /sbr status
+local lastRaw = "none yet" -- raw cooldown values, for /xpb status
 
 -- Seconds left on one cooldown source, or nil if that source gave nothing usable.
 local function Remaining(fn, ...)
@@ -137,7 +137,7 @@ end
 -- mentions experience): when one wears off, remind you to put it back.
 local XP_REMINDERS = 3 -- reminders per worn-off buff, REMIND_EVERY apart, in case you're out of food
 
-local scanTip = CreateFrame("GameTooltip", "SleepingBagReminderScanTip", nil, "GameTooltipTemplate")
+local scanTip = CreateFrame("GameTooltip", "XPBoostReminderScanTip", nil, "GameTooltipTemplate")
 local xpLineCache = {} -- spell ID (or name) -> its experience line, or false if it has none
 
 -- The tooltip line that mentions experience, e.g. "Experience gained from kills increased by 5%."
@@ -145,7 +145,7 @@ local function ExperienceLine(index)
     scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
     scanTip:SetUnitBuff("player", index)
     for n = 2, scanTip:NumLines() do
-        local line = _G["SleepingBagReminderScanTipTextLeft" .. n]
+        local line = _G["XPBoostReminderScanTipTextLeft" .. n]
         local text = line and line:GetText()
         if text and not IsSecret(text) and text:lower():find("experience") then return text end
     end
@@ -209,7 +209,7 @@ local readySince -- first time this ready stretch was seen
 local wasDue     -- bag reminder already shown for this stretch (nil before the first check)
 
 local function Check()
-    if not SleepingBagReminderDB.enabled then return end
+    if not XPBoostReminderDB.enabled then return end
     -- Never interrupt a fight or a corpse run: everything due waits, and the
     -- check after combat ends or you're alive again picks it up.
     local blocked = InCombat() or UnitIsDeadOrGhost("player")
@@ -261,8 +261,8 @@ frame:RegisterEvent("BAG_UPDATE_COOLDOWN")
 frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == ADDON then
-            SleepingBagReminderDB = SleepingBagReminderDB or {}
-            if SleepingBagReminderDB.enabled == nil then SleepingBagReminderDB.enabled = true end
+            XPBoostReminderDB = XPBoostReminderDB or {}
+            if XPBoostReminderDB.enabled == nil then XPBoostReminderDB.enabled = true end
         end
     elseif event == "PLAYER_ENTERING_WORLD" then
         if not started then
@@ -279,15 +279,15 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     end
 end)
 
-SLASH_SLEEPINGBAGREMINDER1 = "/sbr"
-SLASH_SLEEPINGBAGREMINDER2 = "/sleepingbag"
-SlashCmdList.SLEEPINGBAGREMINDER = function(input)
+SLASH_XPBOOSTREMINDER1 = "/xpb"
+SLASH_XPBOOSTREMINDER2 = "/xpboost"
+SlashCmdList.XPBOOSTREMINDER = function(input)
     local cmd = strtrim(input or ""):lower()
     if cmd == "test" then
         Alert({ DEFAULT_MSG, "Well Fed (+5% XP) has worn off. Put it back up!" }, true)
     elseif cmd == "status" then
         local ready = IsReady()
-        Print((SleepingBagReminderDB.enabled and "on" or "off") .. ", bag "
+        Print((XPBoostReminderDB.enabled and "on" or "off") .. ", bag "
             .. (ready == nil and "not found in your bags" or ready and "ready" or "on cooldown")
             .. (itemID and (" (item " .. itemID .. ")") or ""))
         if itemID then Print("cooldown left: " .. lastRaw) end
@@ -306,10 +306,10 @@ SlashCmdList.SLEEPINGBAGREMINDER = function(input)
         Print("other XP buffs: " .. (#active > 0 and table.concat(active, ", ") or "none"))
         if #gone > 0 then Print("worn off, reminding: " .. table.concat(gone, ", ")) end
     else
-        SleepingBagReminderDB.enabled = not SleepingBagReminderDB.enabled
+        XPBoostReminderDB.enabled = not XPBoostReminderDB.enabled
         wasDue, readySince = nil, nil
         wornOff = {}
-        Print(SleepingBagReminderDB.enabled and "on" or "off")
-        if SleepingBagReminderDB.enabled then Check() end
+        Print(XPBoostReminderDB.enabled and "on" or "off")
+        if XPBoostReminderDB.enabled then Check() end
     end
 end

@@ -1,8 +1,0 @@
-## Interface: 16001
-## Title: Sleeping Bag Reminder
-## Notes: Reminds you to use your Cozy Sleeping Bag whenever it's off cooldown.
-## Author: Tony
-## Version: 1.2.0
-## SavedVariables: SleepingBagReminderDB
-
-SleepingBagReminder.lua

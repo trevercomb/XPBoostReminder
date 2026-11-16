@@ -1,4 +1,8 @@
-# Sleeping Bag Reminder changelog
+# XP Boost Reminder changelog
+
+## 1.3.0
+
+- Renamed from Sleeping Bag Reminder to XP Boost Reminder, since it now covers XP food too. The commands are now `/xpb` (or `/xpboost`): `/xpb`, `/xpb test` and `/xpb status`.
 
 ## 1.2.0
 
