@@ -33,23 +33,55 @@ local function FindBag()
                     name = info.hyperlink:match("%[(.-)%]")
                 end
                 if not name then name = GetItemInfo(info.itemID) end
-                if name == ITEM_NAME then return info.itemID end
+                if name == ITEM_NAME then return info.itemID, bag, slot end
             end
         end
     end
 end
 
--- true = ready, false = cooling down, nil = not in bags / unknown.
-local function IsReady()
-    if not itemID or (GetItemCount and GetItemCount(itemID) == 0) then
-        itemID = FindBag()
+local bagIndex, slotIndex  -- where the bag was last seen
+local lastRaw = "none yet" -- raw cooldown values, for /sbr status
+
+-- Seconds left on one cooldown source, or nil if that source gave nothing usable.
+local function Remaining(fn, ...)
+    if not fn then return nil end
+    local ok, start, duration, enable = pcall(fn, ...)
+    if not ok or IsSecret(start) or IsSecret(duration) or IsSecret(enable) then return nil end
+    if type(start) == "table" then -- some clients return a cooldown info table
+        start, duration, enable = start.startTime, start.duration, start.isEnabled
+    end
+    if type(start) ~= "number" or type(duration) ~= "number" then return nil end
+    if enable == 0 or enable == false then return math.huge end -- cooldown hasn't started ticking yet
+    if start == 0 or duration == 0 then return 0 end
+    return math.max(0, start + duration - GetTime())
+end
+
+-- Seconds left (0 when ready), or nil if the bag isn't in your bags or no source answered.
+-- Checks the bag slot (what the tooltip shows) plus both item-ID lookups and trusts the longest.
+local function CooldownLeft()
+    local info = bagIndex and C_Container.GetContainerItemInfo(bagIndex, slotIndex)
+    if not info or info.itemID ~= itemID then
+        itemID, bagIndex, slotIndex = FindBag()
         if not itemID then return nil end
     end
-    local ok, start, duration, enable = pcall(C_Container.GetItemCooldown, itemID)
-    if not ok or IsSecret(start) or IsSecret(duration) or IsSecret(enable) then return nil end
-    if enable == 0 or enable == false then return false end
-    -- A duration of 1.5s or less is just the global cooldown.
-    return (start or 0) == 0 or (duration or 0) <= 1.5
+    local slotLeft = Remaining(C_Container.GetContainerItemCooldown, bagIndex, slotIndex)
+    local itemLeft = Remaining(C_Container.GetItemCooldown, itemID)
+    local globalLeft = Remaining(GetItemCooldown, itemID)
+    local function fmt(v) return v and (v == math.huge and "paused" or string.format("%.0f", v)) or "-" end
+    lastRaw = "slot " .. fmt(slotLeft) .. "s, item " .. fmt(itemLeft) .. "s, global " .. fmt(globalLeft) .. "s"
+    local left
+    for _, v in ipairs({ slotLeft or -1, itemLeft or -1, globalLeft or -1 }) do
+        if v >= 0 and (not left or v > left) then left = v end
+    end
+    return left
+end
+
+-- true = ready, false = cooling down, nil = not in bags / unknown.
+-- A cooldown of 1.5s or less is just the global cooldown.
+local function IsReady()
+    local left = CooldownLeft()
+    if left == nil then return nil end
+    return left <= 1.5
 end
 
 local function InCombat()
@@ -75,13 +107,20 @@ local function TryAlert()
     Alert()
 end
 
+local readySince -- first time this ready stretch was seen
+
 local function Check()
     if not SleepingBagReminderDB.enabled then return end
     local ready = IsReady()
     if ready == nil then return end
     if ready then
+        -- Only believe "ready" once it has held for a few seconds, in case the
+        -- game reports no cooldown before its cooldown data has loaded.
+        readySince = readySince or GetTime()
+        if GetTime() - readySince < 4 then return end
         if not wasReady or GetTime() >= nextRemind then TryAlert() end
     else
+        readySince = nil
         pending = false
     end
     wasReady = ready
@@ -129,9 +168,10 @@ SlashCmdList.SLEEPINGBAGREMINDER = function(input)
         Print((SleepingBagReminderDB.enabled and "on" or "off") .. ", bag "
             .. (ready == nil and "not found in your bags" or ready and "ready" or "on cooldown")
             .. (itemID and (" (item " .. itemID .. ")") or ""))
+        if itemID then Print("cooldown left: " .. lastRaw) end
     else
         SleepingBagReminderDB.enabled = not SleepingBagReminderDB.enabled
-        wasReady, pending = nil, false
+        wasReady, pending, readySince = nil, false, nil
         Print(SleepingBagReminderDB.enabled and "on" or "off")
         if SleepingBagReminderDB.enabled then Check() end
     end
