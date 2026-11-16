@@ -1,5 +1,10 @@
 # XP Boost Reminder changelog
 
+## 1.3.1
+
+- Fixed: other XP buffs like Well Fed weren't found, so no reminder came when they wore off. Buffs are now read with the same aura API that finds Well-Rested.
+- `/xpb status` says so if the buff scan fails.
+
 ## 1.3.0
 
 - Renamed from Sleeping Bag Reminder to XP Boost Reminder, since it now covers XP food too. The commands are now `/xpb` (or `/xpboost`): `/xpb`, `/xpb test` and `/xpb status`.

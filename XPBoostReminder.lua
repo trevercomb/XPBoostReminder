@@ -139,17 +139,61 @@ local XP_REMINDERS = 3 -- reminders per worn-off buff, REMIND_EVERY apart, in ca
 
 local scanTip = CreateFrame("GameTooltip", "XPBoostReminderScanTip", nil, "GameTooltipTemplate")
 local xpLineCache = {} -- spell ID (or name) -> its experience line, or false if it has none
+local scanError         -- why the last buff scan failed, for /xpb status
 
--- The tooltip line that mentions experience, e.g. "Experience gained from kills increased by 5%."
-local function ExperienceLine(index)
-    scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
-    scanTip:SetUnitBuff("player", index)
-    for n = 2, scanTip:NumLines() do
-        local line = _G["XPBoostReminderScanTipTextLeft" .. n]
-        local text = line and line:GetText()
-        if text and not IsSecret(text) and text:lower():find("experience") then return text end
+local function FindExperience(text)
+    if type(text) == "string" and not IsSecret(text) and text:lower():find("experience") then return text end
+end
+
+-- The buff's tooltip lines, or nil if the game didn't give us any. Tries the
+-- newer tooltip-data API first, then a hidden tooltip.
+local function TooltipLines(index, instanceID)
+    local lines = {}
+    local tip = C_TooltipInfo
+    local data = tip and ((instanceID and tip.GetUnitBuffByAuraInstanceID
+            and tip.GetUnitBuffByAuraInstanceID("player", instanceID))
+        or (tip.GetUnitBuff and tip.GetUnitBuff("player", index)))
+    if data and data.lines then
+        for _, line in ipairs(data.lines) do table.insert(lines, line.leftText) end
+    else
+        scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+        if instanceID and scanTip.SetUnitBuffByAuraInstanceID then
+            scanTip:SetUnitBuffByAuraInstanceID("player", instanceID)
+        else
+            scanTip:SetUnitBuff("player", index)
+        end
+        for n = 1, scanTip:NumLines() do
+            local line = _G["XPBoostReminderScanTipTextLeft" .. n]
+            table.insert(lines, line and line:GetText())
+        end
+    end
+    if #lines >= 2 then return lines end
+end
+
+-- The tooltip line that mentions experience, e.g. "Experience gained from kills
+-- increased by 5%.", false if the buff has none, or nil if the tooltip didn't load.
+local function ExperienceLine(index, instanceID)
+    local lines = TooltipLines(index, instanceID)
+    if not lines then return nil end
+    for n = 2, #lines do
+        local text = FindExperience(lines[n])
+        if text then return text end
     end
     return false
+end
+
+-- Buff number i: name, spell ID, aura instance ID; nil when there are no more.
+local function BuffAt(i)
+    local auras = C_UnitAuras
+    local getter = auras and (auras.GetBuffDataByIndex or auras.GetAuraDataByIndex)
+    if getter then
+        local aura = getter == auras.GetBuffDataByIndex and getter("player", i)
+            or getter("player", i, "HELPFUL")
+        if aura then return aura.name, aura.spellId, aura.auraInstanceID end
+        return nil
+    end
+    local name, _, _, _, _, _, _, _, _, spellId = UnitBuff("player", i)
+    return name, spellId
 end
 
 -- Your experience buffs right now, other than Well-Rested, by name: { [name] = effect line }.
@@ -157,11 +201,12 @@ end
 local function ReadXPBuffs()
     local found = {}
     for i = 1, 40 do
-        local name, _, _, _, _, _, _, _, _, spellId = UnitBuff("player", i)
+        local name, spellId, instanceID = BuffAt(i)
         if name == nil then break end
         if not IsSecret(name) and name ~= BUFF_NAME and spellId ~= BUFF_ID then
             local key = (spellId and not IsSecret(spellId)) and spellId or name
-            if xpLineCache[key] == nil then xpLineCache[key] = ExperienceLine(i) end
+            -- Only remember a "no experience line" answer once the tooltip actually loaded.
+            if xpLineCache[key] == nil then xpLineCache[key] = ExperienceLine(i, instanceID) end
             if xpLineCache[key] then found[name] = xpLineCache[key] end
         end
     end
@@ -170,6 +215,7 @@ end
 
 local function XPBuffs()
     local ok, found = pcall(ReadXPBuffs)
+    scanError = not ok and tostring(found) or nil
     return ok and found or nil
 end
 
@@ -304,6 +350,7 @@ SlashCmdList.XPBOOSTREMINDER = function(input)
         for name, effect in pairs(XPBuffs() or {}) do table.insert(active, name .. " (" .. effect .. ")") end
         for name in pairs(wornOff) do table.insert(gone, name) end
         Print("other XP buffs: " .. (#active > 0 and table.concat(active, ", ") or "none"))
+        if scanError then Print("|cffff6060buff scan failed:|r " .. scanError) end
         if #gone > 0 then Print("worn off, reminding: " .. table.concat(gone, ", ")) end
     else
         XPBoostReminderDB.enabled = not XPBoostReminderDB.enabled
