@@ -158,6 +158,11 @@ local function TooltipLines(index, instanceID)
             table.insert(lines, line and line:GetText())
         end
     end
+    -- Hidden (secret) text counts as not loaded, so it's read again later
+    -- instead of being remembered as "no experience line".
+    for _, line in ipairs(lines) do
+        if IsSecret(line) then return nil end
+    end
     if #lines >= 2 then return lines end
 end
 
@@ -285,24 +290,28 @@ local function ItemText(id)
     if #lines < 2 then return nil end -- not loaded; try again next time
     local text = ""
     for _, line in ipairs(lines) do
-        if type(line) == "string" and not IsSecret(line) then text = text .. " " .. line:lower() end
+        -- Hidden (secret) text: don't remember a tooltip we couldn't fully read.
+        if IsSecret(line) then return nil end
+        if type(line) == "string" then text = text .. " " .. line:lower() end
     end
     itemTextCache[id] = text
     return text
 end
 
--- Whether a consumable's tooltip says it gives this buff (by name, e.g. "well
--- fed") or mentions experience. Keeps a drink used while eating from being
--- taken for the food.
-local function GivesBuff(id, buffName)
-    if not IsConsumable(id) then return false end
+-- What a consumable's tooltip says about a buff: whether it names the buff
+-- (e.g. "well fed") and whether it mentions experience. nil if the tooltip
+-- hasn't loaded yet. Non-consumables mention nothing.
+local function ItemMentions(id, buffName)
+    if not IsConsumable(id) then return false, false end
     local text = ItemText(id)
-    return text ~= nil and (text:find(buffName:lower(), 1, true) ~= nil or text:find("experience", 1, true) ~= nil)
+    if not text then return nil end
+    return text:find(buffName:lower(), 1, true) ~= nil, text:find("experience", 1, true) ~= nil
 end
 
+-- XP food: names Well Fed and mentions experience.
 local function IsXPFood(id)
-    local text = IsConsumable(id) and ItemText(id)
-    return text and text:find("well fed", 1, true) ~= nil and text:find("experience", 1, true) ~= nil
+    local names, xp = ItemMentions(id, "Well Fed")
+    return names and xp
 end
 
 local bagFood -- XP food found in your bags: an item ID, false for none, nil to search again
@@ -318,7 +327,7 @@ local function ItemFor(buffName)
             for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
                 local id = C_Container.GetContainerItemID(bag, slot)
                 if id and not IsSecret(id) then
-                    if IsConsumable(id) and not ItemText(id) then complete = false end
+                    if ItemMentions(id, "Well Fed") == nil then complete = false end
                     if IsXPFood(id) then
                         local count = ItemCount(id)
                         if not best or count > bestCount then best, bestCount = id, count end
@@ -338,25 +347,53 @@ local function SafeItemFor(buffName)
     return ok and id or nil
 end
 
+local learning = {}       -- buff name -> when it appeared, while we work out its item
+local baselineNext = true -- next scan just records your buffs (login, turning back on)
+
+-- Which recently used item gave a buff that appeared at `appeared`. An item
+-- that names the buff wins over one that only mentions experience, so an XP
+-- elixir used after eating isn't taken for the food. Returns the item ID,
+-- false if none did, or nil if a tooltip hasn't loaded yet (ask again later).
+local function ItemThatGave(name, appeared)
+    local named, xpOnly, waiting
+    for i = #recentUses, 1, -1 do
+        local use = recentUses[i]
+        if appeared - use.time > LEARN_WINDOW then break end
+        local names, xp = ItemMentions(use.id, name)
+        if names == nil then
+            waiting = true
+        elseif names then
+            named = named or use.id
+        elseif xp then
+            xpOnly = xpOnly or use.id
+        end
+    end
+    if named then return named end
+    if waiting then return nil end
+    return xpOnly or false
+end
+
 local function UpdateXPBuffs()
     local now = XPBuffs()
     if not now then return end
+    if baselineNext then
+        baselineNext, activeXP = false, now
+        return
+    end
+    local t = GetTime()
     for name, effect in pairs(activeXP) do
         if not now[name] then wornOff[name] = { effect = effect, nextRemind = 0, count = 0 } end
     end
     for name in pairs(now) do
         wornOff[name] = nil
-        -- A buff that just appeared after you used an item that gives it: that's its item.
-        if not activeXP[name] then
-            for i = #recentUses, 1, -1 do
-                local use = recentUses[i]
-                if GetTime() - use.time > LEARN_WINDOW then break end
-                if GivesBuff(use.id, name) then
-                    XPBoostReminderDB.items[name] = use.id
-                    break
-                end
-            end
-        end
+        -- A buff that just appeared: work out which item you used for it.
+        if not activeXP[name] then learning[name] = t end
+    end
+    for name, appeared in pairs(learning) do
+        local id = ItemThatGave(name, appeared)
+        if id then XPBoostReminderDB.items[name] = id end
+        -- Done once we know, or give up if a tooltip never loads.
+        if id ~= nil or t - appeared > 30 then learning[name] = nil end
     end
     activeXP = now
 end
@@ -606,8 +643,8 @@ SlashCmdList.XPBOOSTREMINDER = function(input)
         XPBoostReminderDB.enabled = not XPBoostReminderDB.enabled
         wasDue, readySince, bagDismissed = nil, nil, false
         -- Start fresh: buffs gained or lost while off aren't "new" or "worn off".
-        wornOff, recentUses = {}, {}
-        activeXP = XPBuffs() or {}
+        wornOff, recentUses, learning = {}, {}, {}
+        baselineNext = true
         Print(XPBoostReminderDB.enabled and "on" or "off")
         if XPBoostReminderDB.enabled then Check() else UpdateButtons() end
     end

@@ -1,5 +1,10 @@
 # XP Boost Reminder changelog
 
+## 1.0.2
+
+- The eat button learns your food more reliably: an item that names the buff (like "well fed") now wins over another consumable that only mentions experience, and learning waits for the food's tooltip to load instead of giving up.
+- Tooltips the game hides for a moment are read again later instead of being remembered as "not an XP item".
+
 ## 1.0.1
 
 - Fixed: eating and drinking together could make the eat button remember your drink instead of your food. It now only remembers an item whose tooltip gives that buff.
