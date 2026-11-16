@@ -7,7 +7,6 @@ local LOGIN_DELAY = 8      -- let bags and cooldowns load before the first check
 local HEADER = "|cff66ccffSleeping Bag Reminder|r"
 
 local itemID          -- learned from the bags at runtime
-local wasReady        -- nil until the first check, so login/reload counts as "became ready"
 local nextRemind = 0
 local pending = false -- an alert is waiting for combat to end
 local started = false
@@ -84,12 +83,62 @@ local function IsReady()
     return left <= 1.5
 end
 
+-- The bag's buff. At full stacks it's worth keeping, so the reminder waits
+-- until it's nearly gone (sleeping again before it ends keeps the stacks).
+local BUFF_ID = 429959
+local BUFF_NAME = "Well-Rested"
+local FULL_STACKS = 3
+local WARN_LEFT = 600 -- seconds of buff left when a full-stack reminder is due
+
+local function ReadWellRested()
+    local stacks, expires
+    local get = C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID
+    local aura = get and get(BUFF_ID)
+    if aura then
+        stacks, expires = aura.applications, aura.expirationTime
+    else
+        for i = 1, 40 do
+            local name, _, count, _, _, expirationTime, _, _, _, spellId = UnitBuff("player", i)
+            if name == nil then break end
+            if spellId == BUFF_ID or name == BUFF_NAME then
+                stacks, expires = count, expirationTime
+                break
+            end
+        end
+    end
+    if stacks == nil or IsSecret(stacks) or IsSecret(expires) then return nil end
+    if stacks == 0 then stacks = 1 end -- a single application reports 0
+    local left = (expires and expires > 0) and math.max(0, expires - GetTime()) or math.huge
+    return stacks, left
+end
+
+-- Stacks and seconds left on Well-Rested, or nil if you don't have it (or it can't be read).
+local function WellRested()
+    local ok, stacks, left = pcall(ReadWellRested)
+    if ok then return stacks, left end
+end
+
+local DEFAULT_MSG = "Your " .. ITEM_NAME .. " is ready. Unfurl it!"
+
+-- Whether a reminder is due now, and what it should say.
+-- Below full stacks (or no buff): as soon as the bag is off cooldown.
+-- At full stacks: once the bag is ready and the buff has 10 minutes or less left.
+local function Due(ready)
+    if not ready then return false end
+    local stacks, left = WellRested()
+    if stacks and stacks >= FULL_STACKS then
+        if left > WARN_LEFT then return false end
+        return true, string.format("Well-Rested ends in %d min. Unfurl your %s to keep %d stacks!",
+            math.ceil(left / 60), ITEM_NAME, FULL_STACKS)
+    end
+    return true, DEFAULT_MSG
+end
+
 local function InCombat()
     return InCombatLockdown() or UnitAffectingCombat("player")
 end
 
-local function Alert(isTest)
-    local msg = "Your " .. ITEM_NAME .. " is ready. Unfurl it!"
+local function Alert(msg, isTest)
     PlaySound(SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959, "Master")
     if RaidNotice_AddMessage and RaidWarningFrame then
         RaidNotice_AddMessage(RaidWarningFrame, msg, ChatTypeInfo["RAID_WARNING"])
@@ -97,17 +146,18 @@ local function Alert(isTest)
     Print(msg .. (isTest and " |cff9d9d9d(test)|r" or ""))
 end
 
-local function TryAlert()
+local function TryAlert(msg)
     if InCombat() or UnitIsDeadOrGhost("player") then
         pending = true
         return
     end
     pending = false
     nextRemind = GetTime() + REMIND_EVERY
-    Alert()
+    Alert(msg)
 end
 
 local readySince -- first time this ready stretch was seen
+local wasDue     -- nil until the first check, so login/reload counts as "became due"
 
 local function Check()
     if not SleepingBagReminderDB.enabled then return end
@@ -118,12 +168,16 @@ local function Check()
         -- game reports no cooldown before its cooldown data has loaded.
         readySince = readySince or GetTime()
         if GetTime() - readySince < 4 then return end
-        if not wasReady or GetTime() >= nextRemind then TryAlert() end
     else
         readySince = nil
+    end
+    local due, msg = Due(ready)
+    if due then
+        if not wasDue or GetTime() >= nextRemind then TryAlert(msg) end
+    else
         pending = false
     end
-    wasReady = ready
+    wasDue = due
 end
 
 local frame = CreateFrame("Frame")
@@ -148,11 +202,13 @@ frame:SetScript("OnEvent", function(_, event, arg1)
             end)
         end
     elseif event == "BAG_UPDATE_COOLDOWN" then
-        if started and wasReady ~= nil then Check() end
+        if started and wasDue ~= nil then Check() end
     elseif pending and SleepingBagReminderDB.enabled then
-        -- Combat ended or we're alive again: deliver the held alert if it's still ready.
+        -- Combat ended or we're alive again: deliver the held alert if it's still due.
         C_Timer.After(1, function()
-            if pending and IsReady() then TryAlert() end
+            if not pending then return end
+            local due, msg = Due(IsReady())
+            if due then TryAlert(msg) end
         end)
     end
 end)
@@ -162,16 +218,25 @@ SLASH_SLEEPINGBAGREMINDER2 = "/sleepingbag"
 SlashCmdList.SLEEPINGBAGREMINDER = function(input)
     local cmd = strtrim(input or ""):lower()
     if cmd == "test" then
-        Alert(true)
+        Alert(DEFAULT_MSG, true)
     elseif cmd == "status" then
         local ready = IsReady()
         Print((SleepingBagReminderDB.enabled and "on" or "off") .. ", bag "
             .. (ready == nil and "not found in your bags" or ready and "ready" or "on cooldown")
             .. (itemID and (" (item " .. itemID .. ")") or ""))
         if itemID then Print("cooldown left: " .. lastRaw) end
+        local stacks, left = WellRested()
+        if not stacks then
+            Print(BUFF_NAME .. ": none, so you're reminded when the bag is ready")
+        else
+            Print(string.format("%s: %d stack%s, %s left%s", BUFF_NAME, stacks, stacks == 1 and "" or "s",
+                left == math.huge and "no time limit" or (math.ceil(left / 60) .. " min"),
+                stacks >= FULL_STACKS and ", so you're reminded at 10 min left"
+                    or ", so you're reminded when the bag is ready"))
+        end
     else
         SleepingBagReminderDB.enabled = not SleepingBagReminderDB.enabled
-        wasReady, pending, readySince = nil, false, nil
+        wasDue, pending, readySince = nil, false, nil
         Print(SleepingBagReminderDB.enabled and "on" or "off")
         if SleepingBagReminderDB.enabled then Check() end
     end

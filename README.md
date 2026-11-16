@@ -2,13 +2,18 @@
 
 A tiny WoW Forever addon that reminds you to use your **Cozy Sleeping Bag** whenever it's off cooldown.
 
-The bag's rested bonus lasts 2 hours but its cooldown is only 1 hour, so it's worth unfurling again as soon as it's ready. When the cooldown ends you get a sound, an on-screen warning and a chat line. It also reminds you at login if the bag is ready, and every 5 minutes until you use it. It never interrupts a fight: reminders wait until combat ends.
+Sleeping in the bag gives the Well-Rested buff (up to 3 stacks, 2 hours); the bag's cooldown is 1 hour. You get a sound, an on-screen warning and a chat line:
+
+- **Below 3 stacks, or no buff:** as soon as the bag is off cooldown, so you can build the stacks up.
+- **At 3 stacks:** when the buff has 10 minutes left, so you sleep again and keep the stacks before they run out.
+
+It also checks at login, and repeats every 5 minutes until you use the bag. It never interrupts a fight: reminders wait until combat ends.
 
 ## Commands
 
 - `/sbr`: turn reminders on or off
 - `/sbr test`: play the alert
-- `/sbr status`: whether it's on, and how long the bag's cooldown has left
+- `/sbr status`: whether it's on, the bag's cooldown, and your Well-Rested stacks and time left
 
 ## Releasing
 
