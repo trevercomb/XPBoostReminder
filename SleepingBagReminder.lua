@@ -8,7 +8,6 @@ local HEADER = "|cff66ccffSleeping Bag Reminder|r"
 
 local itemID          -- learned from the bags at runtime
 local nextRemind = 0
-local pending = false -- an alert is waiting for combat to end
 local started = false
 
 local function Print(msg)
@@ -134,50 +133,122 @@ local function Due(ready)
     return true, DEFAULT_MSG
 end
 
+-- Other experience buffs (food like Well Fed, and anything else whose tooltip
+-- mentions experience): when one wears off, remind you to put it back.
+local XP_REMINDERS = 3 -- reminders per worn-off buff, REMIND_EVERY apart, in case you're out of food
+
+local scanTip = CreateFrame("GameTooltip", "SleepingBagReminderScanTip", nil, "GameTooltipTemplate")
+local xpLineCache = {} -- spell ID (or name) -> its experience line, or false if it has none
+
+-- The tooltip line that mentions experience, e.g. "Experience gained from kills increased by 5%."
+local function ExperienceLine(index)
+    scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+    scanTip:SetUnitBuff("player", index)
+    for n = 2, scanTip:NumLines() do
+        local line = _G["SleepingBagReminderScanTipTextLeft" .. n]
+        local text = line and line:GetText()
+        if text and not IsSecret(text) and text:lower():find("experience") then return text end
+    end
+    return false
+end
+
+-- Your experience buffs right now, other than Well-Rested, by name: { [name] = effect line }.
+-- By name, so eating a different food for the same "Well Fed" counts as putting it back.
+local function ReadXPBuffs()
+    local found = {}
+    for i = 1, 40 do
+        local name, _, _, _, _, _, _, _, _, spellId = UnitBuff("player", i)
+        if name == nil then break end
+        if not IsSecret(name) and name ~= BUFF_NAME and spellId ~= BUFF_ID then
+            local key = (spellId and not IsSecret(spellId)) and spellId or name
+            if xpLineCache[key] == nil then xpLineCache[key] = ExperienceLine(i) end
+            if xpLineCache[key] then found[name] = xpLineCache[key] end
+        end
+    end
+    return found
+end
+
+local function XPBuffs()
+    local ok, found = pcall(ReadXPBuffs)
+    return ok and found or nil
+end
+
+local activeXP = {} -- XP buffs you had at the last check
+local wornOff = {}  -- name -> { effect, nextRemind, count }
+
+local function WornOffMessage(name, entry)
+    local pct = entry.effect:match("(%d+)%%")
+    return name .. (pct and (" (+" .. pct .. "% XP)") or "") .. " has worn off. Put it back up!"
+end
+
+local function UpdateXPBuffs()
+    local now = XPBuffs()
+    if not now then return end
+    for name, effect in pairs(activeXP) do
+        if not now[name] then wornOff[name] = { effect = effect, nextRemind = 0, count = 0 } end
+    end
+    for name in pairs(now) do wornOff[name] = nil end
+    activeXP = now
+end
+
 local function InCombat()
     return InCombatLockdown() or UnitAffectingCombat("player")
 end
 
-local function Alert(msg, isTest)
+local function Alert(messages, isTest)
     PlaySound(SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959, "Master")
-    if RaidNotice_AddMessage and RaidWarningFrame then
-        RaidNotice_AddMessage(RaidWarningFrame, msg, ChatTypeInfo["RAID_WARNING"])
+    for _, msg in ipairs(messages) do
+        if RaidNotice_AddMessage and RaidWarningFrame then
+            RaidNotice_AddMessage(RaidWarningFrame, msg, ChatTypeInfo["RAID_WARNING"])
+        end
+        Print(msg .. (isTest and " |cff9d9d9d(test)|r" or ""))
     end
-    Print(msg .. (isTest and " |cff9d9d9d(test)|r" or ""))
-end
-
-local function TryAlert(msg)
-    if InCombat() or UnitIsDeadOrGhost("player") then
-        pending = true
-        return
-    end
-    pending = false
-    nextRemind = GetTime() + REMIND_EVERY
-    Alert(msg)
 end
 
 local readySince -- first time this ready stretch was seen
-local wasDue     -- nil until the first check, so login/reload counts as "became due"
+local wasDue     -- bag reminder already shown for this stretch (nil before the first check)
 
 local function Check()
     if not SleepingBagReminderDB.enabled then return end
+    -- Never interrupt a fight or a corpse run: everything due waits, and the
+    -- check after combat ends or you're alive again picks it up.
+    local blocked = InCombat() or UnitIsDeadOrGhost("player")
+    local messages = {}
+    local t = GetTime()
+
+    UpdateXPBuffs()
+    if not blocked then
+        for name, entry in pairs(wornOff) do
+            if entry.count < XP_REMINDERS and t >= entry.nextRemind then
+                entry.count, entry.nextRemind = entry.count + 1, t + REMIND_EVERY
+                table.insert(messages, WornOffMessage(name, entry))
+            end
+        end
+    end
+
     local ready = IsReady()
-    if ready == nil then return end
-    if ready then
-        -- Only believe "ready" once it has held for a few seconds, in case the
-        -- game reports no cooldown before its cooldown data has loaded.
-        readySince = readySince or GetTime()
-        if GetTime() - readySince < 4 then return end
-    else
-        readySince = nil
+    if ready ~= nil then
+        local settled = true
+        if ready then
+            -- Only believe "ready" once it has held for a few seconds, in case the
+            -- game reports no cooldown before its cooldown data has loaded.
+            readySince = readySince or t
+            settled = t - readySince >= 4
+        else
+            readySince = nil
+        end
+        if settled then
+            local due, msg = Due(ready)
+            if not due then
+                wasDue = false
+            elseif (not wasDue or t >= nextRemind) and not blocked then
+                wasDue, nextRemind = true, t + REMIND_EVERY
+                table.insert(messages, msg)
+            end
+        end
     end
-    local due, msg = Due(ready)
-    if due then
-        if not wasDue or GetTime() >= nextRemind then TryAlert(msg) end
-    else
-        pending = false
-    end
-    wasDue = due
+
+    if #messages > 0 then Alert(messages) end
 end
 
 local frame = CreateFrame("Frame")
@@ -201,15 +272,10 @@ frame:SetScript("OnEvent", function(_, event, arg1)
                 C_Timer.NewTicker(CHECK_EVERY, Check)
             end)
         end
-    elseif event == "BAG_UPDATE_COOLDOWN" then
-        if started and wasDue ~= nil then Check() end
-    elseif pending and SleepingBagReminderDB.enabled then
-        -- Combat ended or we're alive again: deliver the held alert if it's still due.
-        C_Timer.After(1, function()
-            if not pending then return end
-            local due, msg = Due(IsReady())
-            if due then TryAlert(msg) end
-        end)
+    elseif started then
+        -- Bag cooldown changed, combat ended, or you're alive again: check now
+        -- (a moment later, so the game has settled) instead of on the next tick.
+        C_Timer.After(1, Check)
     end
 end)
 
@@ -218,7 +284,7 @@ SLASH_SLEEPINGBAGREMINDER2 = "/sleepingbag"
 SlashCmdList.SLEEPINGBAGREMINDER = function(input)
     local cmd = strtrim(input or ""):lower()
     if cmd == "test" then
-        Alert(DEFAULT_MSG, true)
+        Alert({ DEFAULT_MSG, "Well Fed (+5% XP) has worn off. Put it back up!" }, true)
     elseif cmd == "status" then
         local ready = IsReady()
         Print((SleepingBagReminderDB.enabled and "on" or "off") .. ", bag "
@@ -234,9 +300,15 @@ SlashCmdList.SLEEPINGBAGREMINDER = function(input)
                 stacks >= FULL_STACKS and ", so you're reminded at 10 min left"
                     or ", so you're reminded when the bag is ready"))
         end
+        local active, gone = {}, {}
+        for name, effect in pairs(XPBuffs() or {}) do table.insert(active, name .. " (" .. effect .. ")") end
+        for name in pairs(wornOff) do table.insert(gone, name) end
+        Print("other XP buffs: " .. (#active > 0 and table.concat(active, ", ") or "none"))
+        if #gone > 0 then Print("worn off, reminding: " .. table.concat(gone, ", ")) end
     else
         SleepingBagReminderDB.enabled = not SleepingBagReminderDB.enabled
-        wasDue, pending, readySince = nil, false, nil
+        wasDue, readySince = nil, nil
+        wornOff = {}
         Print(SleepingBagReminderDB.enabled and "on" or "off")
         if SleepingBagReminderDB.enabled then Check() end
     end

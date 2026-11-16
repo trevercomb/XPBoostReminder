@@ -1,5 +1,10 @@
 # Sleeping Bag Reminder changelog
 
+## 1.2.0
+
+- Other experience buffs: when a buff whose tooltip mentions experience (like Well Fed from food that boosts XP) wears off, or you lose it by dying, you're reminded to put it back up. Up to 3 reminders, 5 minutes apart, in case you're out of food.
+- `/sbr status` lists your current XP buffs and any worn-off ones it's still reminding you about.
+
 ## 1.1.0
 
 - At 3 stacks of Well-Rested, the reminder waits until the buff has 10 minutes left, since sleeping in the bag again before it ends keeps the stacks. Below 3 stacks (or with no buff) it still reminds you as soon as the bag is off cooldown.
