@@ -457,7 +457,7 @@ local function Check()
     UpdateXPBuffs()
     if not blocked then
         for name, entry in pairs(wornOff) do
-            if entry.count < XP_REMINDERS and t >= entry.nextRemind then
+            if not entry.dismissed and entry.count < XP_REMINDERS and t >= entry.nextRemind then
                 entry.count, entry.nextRemind = entry.count + 1, t + REMIND_EVERY
                 table.insert(messages, WornOffMessage(name, entry))
             end
@@ -480,7 +480,7 @@ local function Check()
             bagDueNow = due
             if not due then
                 wasDue, bagDismissed = false, false
-            elseif (not wasDue or t >= nextRemind) and not blocked then
+            elseif (not wasDue or t >= nextRemind) and not blocked and not bagDismissed then
                 wasDue, nextRemind = true, t + REMIND_EVERY
                 table.insert(messages, msg)
             end

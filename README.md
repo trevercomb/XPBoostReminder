@@ -17,7 +17,7 @@ Any other buff whose tooltip mentions experience, such as Well Fed from food tha
 
 ## Click to use
 
-When a reminder is due, a button appears below the middle of the screen: the sleeping bag (click to sleep) or your XP food (click to eat). Left-click uses it, right-click dismisses it. For food, it remembers what you last ate before the buff appeared, and otherwise looks in your bags for food whose tooltip mentions Well Fed and experience. Buttons hide during combat, since the game doesn't allow changing them then.
+When a reminder is due, a button appears below the middle of the screen: the sleeping bag (click to sleep) or your XP food (click to eat). Left-click uses it. Right-click means "not now": it hides the button and silences that reminder, for food until the buff is back and wears off again, for the sleeping bag until you next use it. For food, it remembers what you last ate before the buff appeared, and otherwise looks in your bags for food whose tooltip mentions Well Fed and experience. Buttons hide during combat, since the game doesn't allow changing them then.
 
 ## Commands
 

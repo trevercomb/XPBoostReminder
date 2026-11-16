@@ -1,5 +1,9 @@
 # XP Boost Reminder changelog
 
+## 1.4.2
+
+- Right-clicking a button now also silences that reminder's alerts, not just the button: food until the buff is back and wears off again, the sleeping bag until you next use it.
+
 ## 1.4.1
 
 - Fixed: `/xpb status` hit a Lua error on the food line.
