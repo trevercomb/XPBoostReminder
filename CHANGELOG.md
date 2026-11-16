@@ -1,5 +1,12 @@
 # XP Boost Reminder changelog
 
+## 1.4.0
+
+- Click to eat: when Well Fed (or another XP buff) wears off, a button with your food appears below the middle of the screen. Left-click eats, right-click dismisses it. It remembers the food you last ate before the buff appeared, and otherwise looks in your bags for food whose tooltip mentions Well Fed and experience.
+- Click to sleep: the same kind of button for the Cozy Sleeping Bag when its reminder is due.
+- Buttons never change during combat: they hide as combat starts and come back after.
+- `/xpb status` shows which food the button would use.
+
 ## 1.3.1
 
 - Fixed: other XP buffs like Well Fed weren't found, so no reminder came when they wore off. Buffs are now read with the same aura API that finds Well-Rested.

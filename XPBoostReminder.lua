@@ -227,13 +227,110 @@ local function WornOffMessage(name, entry)
     return name .. (pct and (" (+" .. pct .. "% XP)") or "") .. " has worn off. Put it back up!"
 end
 
+-- Click to eat: which item puts each XP buff back. Learned from the last item
+-- you used before the buff appeared (saved per buff name), with a bag search
+-- for food whose tooltip mentions Well Fed and experience as a fallback.
+local LEARN_WINDOW = 90 -- seconds between using an item and its buff appearing
+local lastUsed          -- { id, time } of the last item you used
+
+local function ItemCount(id)
+    local fn = (C_Item and C_Item.GetItemCount) or GetItemCount
+    return fn and fn(id) or 0
+end
+
+local function IsConsumable(id)
+    local fn = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    local classID = fn and select(6, fn(id))
+    return classID == 0
+end
+
+local function NoteUse(id)
+    if type(id) == "number" and id ~= itemID then lastUsed = { id = id, time = GetTime() } end
+end
+
+local function ItemIDOf(item)
+    if type(item) == "number" then return item end
+    local fn = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    return item and fn and fn(item)
+end
+
+-- Notice items used from bags, action bars and /use, without touching how they work.
+local function SafeHook(owner, name, handler)
+    if owner and owner[name] then
+        hooksecurefunc(owner, name, function(...) pcall(handler, ...) end)
+    end
+end
+SafeHook(C_Container, "UseContainerItem", function(bag, slot) NoteUse(C_Container.GetContainerItemID(bag, slot)) end)
+SafeHook(_G, "UseAction", function(slot)
+    local kind, id = GetActionInfo(slot)
+    if kind == "item" then NoteUse(id) end
+end)
+SafeHook(_G, "UseItemByName", function(item) NoteUse(ItemIDOf(item)) end)
+SafeHook(C_Item, "UseItemByName", function(item) NoteUse(ItemIDOf(item)) end)
+
+local foodCache = {} -- item ID -> true if its tooltip mentions Well Fed and experience
+
+local function IsXPFood(bag, slot, id)
+    if foodCache[id] ~= nil then return foodCache[id] end
+    if not IsConsumable(id) then foodCache[id] = false return false end
+    local lines = {}
+    local data = C_TooltipInfo and C_TooltipInfo.GetBagItem and C_TooltipInfo.GetBagItem(bag, slot)
+    if data and data.lines then
+        for _, line in ipairs(data.lines) do table.insert(lines, line.leftText) end
+    else
+        scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+        scanTip:SetBagItem(bag, slot)
+        for n = 1, scanTip:NumLines() do
+            local line = _G["XPBoostReminderScanTipTextLeft" .. n]
+            table.insert(lines, line and line:GetText())
+        end
+    end
+    if #lines < 2 then return false end -- tooltip didn't load; try again next time
+    local text = ""
+    for _, line in ipairs(lines) do
+        if type(line) == "string" and not IsSecret(line) then text = text .. " " .. line:lower() end
+    end
+    foodCache[id] = text:find("well fed") ~= nil and text:find("experience") ~= nil
+    return foodCache[id]
+end
+
+-- The item to click for a worn-off buff, or nil if you have none.
+local function ItemFor(buffName)
+    local learned = XPBoostReminderDB.items[buffName]
+    if learned and ItemCount(learned) > 0 then return learned end
+    if not buffName:lower():find("well fed") then return nil end
+    local best, bestCount
+    for bag = 0, NUM_BAG_SLOTS or 4 do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+            local id = C_Container.GetContainerItemID(bag, slot)
+            if id and not IsSecret(id) and IsXPFood(bag, slot, id) then
+                local count = ItemCount(id)
+                if not best or count > bestCount then best, bestCount = id, count end
+            end
+        end
+    end
+    return best
+end
+
+local function SafeItemFor(buffName)
+    local ok, id = pcall(ItemFor, buffName)
+    return ok and id or nil
+end
+
 local function UpdateXPBuffs()
     local now = XPBuffs()
     if not now then return end
     for name, effect in pairs(activeXP) do
         if not now[name] then wornOff[name] = { effect = effect, nextRemind = 0, count = 0 } end
     end
-    for name in pairs(now) do wornOff[name] = nil end
+    for name in pairs(now) do
+        wornOff[name] = nil
+        -- A buff that just appeared after you used a consumable: that's its item.
+        if not activeXP[name] and lastUsed and GetTime() - lastUsed.time <= LEARN_WINDOW
+            and IsConsumable(lastUsed.id) then
+            XPBoostReminderDB.items[name] = lastUsed.id
+        end
+    end
     activeXP = now
 end
 
@@ -250,6 +347,96 @@ local function Alert(messages, isTest)
         Print(msg .. (isTest and " |cff9d9d9d(test)|r" or ""))
     end
 end
+
+-- Click-to-use buttons. WoW only lets you use an item through a secure button
+-- you click yourself, and secure buttons can't be shown, hidden or changed in
+-- combat, so they're only updated outside it (and hidden as combat starts).
+local BUTTON_SIZE, BUTTON_Y = 48, -120
+local bagDueNow, bagDismissed = false, false
+
+local function MakeButton(key, label)
+    local b = CreateFrame("Button", "XPBoostReminder" .. key .. "Button", UIParent, "SecureActionButtonTemplate")
+    b:SetSize(BUTTON_SIZE, BUTTON_SIZE)
+    b:SetFrameStrata("HIGH")
+    b:Hide()
+    b:RegisterForClicks("AnyUp", "AnyDown")
+    b:SetAttribute("type1", "item") -- left-click uses the item; right-click only dismisses
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetAllPoints()
+    b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    b.count = b:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    b.count:SetPoint("BOTTOMRIGHT", -3, 3)
+    b.label = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    b.label:SetPoint("TOP", b, "BOTTOM", 0, -3)
+    b.label:SetText(label)
+    b:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        if self.itemID then GameTooltip:SetItemByID(self.itemID) end
+        GameTooltip:AddLine("Left-click to use, right-click to dismiss", 0.6, 0.8, 1)
+        GameTooltip:Show()
+    end)
+    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    return b
+end
+
+local bagButton = MakeButton("Bag", "Click to sleep")
+local foodButton = MakeButton("Food", "Click to eat")
+
+-- Set a button's item and show it; returns it, or nil when there's no item.
+local function Arm(button, id, count)
+    if not id then return nil end
+    if button.itemID ~= id then
+        button.itemID = id
+        button:SetAttribute("item", "item:" .. id)
+        local iconFn = (C_Item and C_Item.GetItemIconByID) or GetItemIcon
+        button.icon:SetTexture(iconFn and iconFn(id) or 134400)
+    end
+    button.count:SetText(count and count > 1 and count or "")
+    return button
+end
+
+local function UpdateButtons()
+    if InCombatLockdown() then return end
+    local shown = {}
+    local enabled = XPBoostReminderDB.enabled and not UnitIsDeadOrGhost("player")
+    if enabled and bagDueNow and not bagDismissed and itemID then
+        table.insert(shown, Arm(bagButton, itemID))
+    end
+    if enabled then
+        for name, entry in pairs(wornOff) do
+            if not entry.dismissed then
+                local id = SafeItemFor(name)
+                if id then
+                    foodButton.buffName = name
+                    table.insert(shown, Arm(foodButton, id, ItemCount(id)))
+                    break
+                end
+            end
+        end
+    end
+    for _, b in ipairs({ bagButton, foodButton }) do
+        if not tContains(shown, b) then b:Hide() end
+    end
+    local gap = BUTTON_SIZE + 40
+    for i, b in ipairs(shown) do
+        b:ClearAllPoints()
+        b:SetPoint("CENTER", UIParent, "CENTER", (i - (#shown + 1) / 2) * gap, BUTTON_Y)
+        b:Show()
+    end
+end
+
+bagButton:SetScript("PostClick", function(self, button)
+    if button == "RightButton" then bagDismissed = true UpdateButtons() end
+end)
+foodButton:SetScript("PreClick", function(self, button)
+    if button == "LeftButton" then NoteUse(self.itemID) end
+end)
+foodButton:SetScript("PostClick", function(self, button)
+    if button == "RightButton" and self.buffName and wornOff[self.buffName] then
+        wornOff[self.buffName].dismissed = true
+        UpdateButtons()
+    end
+end)
 
 local readySince -- first time this ready stretch was seen
 local wasDue     -- bag reminder already shown for this stretch (nil before the first check)
@@ -285,8 +472,9 @@ local function Check()
         end
         if settled then
             local due, msg = Due(ready)
+            bagDueNow = due
             if not due then
-                wasDue = false
+                wasDue, bagDismissed = false, false
             elseif (not wasDue or t >= nextRemind) and not blocked then
                 wasDue, nextRemind = true, t + REMIND_EVERY
                 table.insert(messages, msg)
@@ -295,6 +483,7 @@ local function Check()
     end
 
     if #messages > 0 then Alert(messages) end
+    UpdateButtons()
 end
 
 local frame = CreateFrame("Frame")
@@ -304,11 +493,19 @@ frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 frame:RegisterEvent("PLAYER_UNGHOST")
 frame:RegisterEvent("PLAYER_ALIVE")
 frame:RegisterEvent("BAG_UPDATE_COOLDOWN")
+frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == ADDON then
             XPBoostReminderDB = XPBoostReminderDB or {}
             if XPBoostReminderDB.enabled == nil then XPBoostReminderDB.enabled = true end
+            XPBoostReminderDB.items = XPBoostReminderDB.items or {} -- buff name -> item that gives it
+        end
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        -- Combat is starting: last chance to hide the buttons until it ends.
+        if not InCombatLockdown() then
+            bagButton:Hide()
+            foodButton:Hide()
         end
     elseif event == "PLAYER_ENTERING_WORLD" then
         if not started then
@@ -352,11 +549,16 @@ SlashCmdList.XPBOOSTREMINDER = function(input)
         Print("other XP buffs: " .. (#active > 0 and table.concat(active, ", ") or "none"))
         if scanError then Print("|cffff6060buff scan failed:|r " .. scanError) end
         if #gone > 0 then Print("worn off, reminding: " .. table.concat(gone, ", ")) end
+        local food = SafeItemFor("Well Fed")
+        local link = food and (select(2, GetItemInfo(food)) or ("item " .. food))
+        Print("food for Well Fed: " .. (food and (link .. " x" .. ItemCount(food)
+            .. (XPBoostReminderDB.items["Well Fed"] == food and " (the food you last ate)" or " (found in your bags)"))
+            or "none found yet (eat XP food once and it's remembered)"))
     else
         XPBoostReminderDB.enabled = not XPBoostReminderDB.enabled
-        wasDue, readySince = nil, nil
+        wasDue, readySince, bagDismissed = nil, nil, false
         wornOff = {}
         Print(XPBoostReminderDB.enabled and "on" or "off")
-        if XPBoostReminderDB.enabled then Check() end
+        if XPBoostReminderDB.enabled then Check() else UpdateButtons() end
     end
 end
