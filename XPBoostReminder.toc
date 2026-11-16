@@ -5,5 +5,6 @@
 ## IconTexture: Interface\AddOns\XPBoostReminder\Media\icon
 ## Version: 1.0.0
 ## SavedVariables: XPBoostReminderDB
+## X-Curse-Project-ID: 1809714
 
 XPBoostReminder.lua
