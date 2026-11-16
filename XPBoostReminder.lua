@@ -18,6 +18,9 @@ local function IsSecret(v)
     return issecretvalue ~= nil and issecretvalue(v)
 end
 
+-- Forever has the newer C_Item versions; the old globals may be gone.
+local ItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+
 -- Finds the bag by name (from the item link, which works even when the item cache is cold).
 local function FindBag()
     if not C_Container then return nil end
@@ -30,7 +33,7 @@ local function FindBag()
                 if (not name or IsSecret(name)) and info.hyperlink and not IsSecret(info.hyperlink) then
                     name = info.hyperlink:match("%[(.-)%]")
                 end
-                if not name then name = GetItemInfo(info.itemID) end
+                if not name and ItemInfo then name = ItemInfo(info.itemID) end
                 if name == ITEM_NAME then return info.itemID, bag, slot end
             end
         end
@@ -415,7 +418,9 @@ local function UpdateButtons()
         end
     end
     for _, b in ipairs({ bagButton, foodButton }) do
-        if not tContains(shown, b) then b:Hide() end
+        local isShown = false
+        for _, s in ipairs(shown) do isShown = isShown or s == b end
+        if not isShown then b:Hide() end
     end
     local gap = BUTTON_SIZE + 40
     for i, b in ipairs(shown) do
@@ -550,7 +555,7 @@ SlashCmdList.XPBOOSTREMINDER = function(input)
         if scanError then Print("|cffff6060buff scan failed:|r " .. scanError) end
         if #gone > 0 then Print("worn off, reminding: " .. table.concat(gone, ", ")) end
         local food = SafeItemFor("Well Fed")
-        local link = food and (select(2, GetItemInfo(food)) or ("item " .. food))
+        local link = food and ((ItemInfo and select(2, ItemInfo(food))) or ("item " .. food))
         Print("food for Well Fed: " .. (food and (link .. " x" .. ItemCount(food)
             .. (XPBoostReminderDB.items["Well Fed"] == food and " (the food you last ate)" or " (found in your bags)"))
             or "none found yet (eat XP food once and it's remembered)"))

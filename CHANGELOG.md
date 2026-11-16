@@ -1,5 +1,9 @@
 # XP Boost Reminder changelog
 
+## 1.4.1
+
+- Fixed: `/xpb status` hit a Lua error on the food line.
+
 ## 1.4.0
 
 - Click to eat: when Well Fed (or another XP buff) wears off, a button with your food appears below the middle of the screen. Left-click eats, right-click dismisses it. It remembers the food you last ate before the buff appeared, and otherwise looks in your bags for food whose tooltip mentions Well Fed and experience.
