@@ -3,7 +3,7 @@
 ## Notes: Reminds you to keep your experience buffs up: the Cozy Sleeping Bag's Well-Rested, and XP food like Well Fed.
 ## Author: Tony
 ## IconTexture: Interface\AddOns\XPBoostReminder\Media\icon
-## Version: 1.0.2
+## Version: 1.0.3
 ## SavedVariables: XPBoostReminderDB
 ## X-Curse-Project-ID: 1809714
 

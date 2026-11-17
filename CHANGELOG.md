@@ -1,5 +1,10 @@
 # XP Boost Reminder changelog
 
+## 1.0.3
+
+- Fixed: a Well Fed (or other XP buff) already running when you logged in could wear off without a reminder. Right after login the game may not have loaded the buff's description yet, and the addon took that as "not an XP buff" for the rest of the session. It now waits for the game's data, checks again later, and remembers your XP buffs between sessions.
+- The same for food in your bags: a food tooltip read before the game had its details is checked again later.
+
 ## 1.0.2
 
 - The eat button learns your food more reliably: an item that names the buff (like "well fed") now wins over another consumable that only mentions experience, and learning waits for the food's tooltip to load instead of giving up.

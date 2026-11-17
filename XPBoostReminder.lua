@@ -129,8 +129,10 @@ end
 local XP_REMINDERS = 3 -- reminders per worn-off buff, REMIND_EVERY apart, in case you're out of food
 
 local scanTip = CreateFrame("GameTooltip", "XPBoostReminderScanTip", nil, "GameTooltipTemplate")
-local xpLineCache = {} -- spell ID (or name) -> its experience line, or false if it has none
-local scanError         -- why the last buff scan failed, for /xpb status
+local xpLineCache = {} -- spell ID (or name) -> its experience line (XP buffs only)
+local notXP = {}       -- spell ID (or name) -> when its tooltip showed no experience line
+local RECHECK = 300    -- seconds before a "not XP" answer is checked again
+local scanError        -- why the last buff scan failed, for /xpb status
 
 local function FindExperience(text)
     if type(text) == "string" and not IsSecret(text) and text:lower():find("experience") then return text end
@@ -168,7 +170,14 @@ end
 
 -- The tooltip line that mentions experience, e.g. "Experience gained from kills
 -- increased by 5%.", false if the buff has none, or nil if the tooltip didn't load.
-local function ExperienceLine(index, instanceID)
+local function ExperienceLine(index, instanceID, spellId)
+    -- Right after login the spell's description may not be loaded yet, and a
+    -- tooltip without it would look like "no experience line". Ask for it and
+    -- try again on a later check instead.
+    if spellId and C_Spell and C_Spell.IsSpellDataCached and not C_Spell.IsSpellDataCached(spellId) then
+        if C_Spell.RequestLoadSpellData then C_Spell.RequestLoadSpellData(spellId) end
+        return nil
+    end
     local lines = TooltipLines(index, instanceID)
     if not lines then return nil end
     for n = 2, #lines do
@@ -196,12 +205,22 @@ local function ReadXPBuffs()
         local name, spellId, instanceID = BuffAt(i)
         if name == nil then break end
         if not IsSecret(name) and name ~= BUFF_NAME and spellId ~= BUFF_ID then
-            local key = (spellId and not IsSecret(spellId)) and spellId or name
-            local line = xpLineCache[key]
-            if line == nil then
-                line = ExperienceLine(i, instanceID)
-                -- Only remember an answer once the tooltip actually loaded.
-                if line ~= nil then xpLineCache[key] = line end
+            local id = (type(spellId) == "number" and not IsSecret(spellId)) and spellId or nil
+            local key = id or name
+            -- Known XP buffs: from this session, or saved from earlier ones.
+            local line = xpLineCache[key] or (id and XPBoostReminderDB.xpSpells[id])
+            if not line then
+                if notXP[key] and GetTime() - notXP[key] < RECHECK then
+                    line = false
+                else
+                    line = ExperienceLine(i, instanceID, id)
+                    if line then
+                        xpLineCache[key] = line
+                        if id then XPBoostReminderDB.xpSpells[id] = line end
+                    elseif line == false then
+                        notXP[key] = GetTime() -- checked again after RECHECK
+                    end
+                end
             end
             if line then
                 found[name] = line
@@ -270,11 +289,20 @@ end)
 SafeHook(_G, "UseItemByName", function(item) NoteUse(ItemIDOf(item)) end)
 SafeHook(C_Item, "UseItemByName", function(item) NoteUse(ItemIDOf(item)) end)
 
-local itemTextCache = {} -- item ID -> its tooltip text, lowercased
+local itemTextCache = {} -- item ID -> { text = its tooltip lowercased, time = when read }
 
 -- An item's whole tooltip in lowercase, or nil if it hasn't loaded yet.
+-- Tooltips that mention experience are kept; others are read again after
+-- RECHECK, in case they were read before the game had the item's details.
 local function ItemText(id)
-    if itemTextCache[id] then return itemTextCache[id] end
+    local cached = itemTextCache[id]
+    if cached and (cached.text:find("experience", 1, true) or GetTime() - cached.time < RECHECK) then
+        return cached.text
+    end
+    if C_Item and C_Item.IsItemDataCachedByID and not C_Item.IsItemDataCachedByID(id) then
+        if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
+        return nil
+    end
     local lines = {}
     local data = C_TooltipInfo and C_TooltipInfo.GetItemByID and C_TooltipInfo.GetItemByID(id)
     if data and data.lines then
@@ -294,7 +322,7 @@ local function ItemText(id)
         if IsSecret(line) then return nil end
         if type(line) == "string" then text = text .. " " .. line:lower() end
     end
-    itemTextCache[id] = text
+    itemTextCache[id] = { text = text, time = GetTime() }
     return text
 end
 
@@ -580,6 +608,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
             XPBoostReminderDB = XPBoostReminderDB or {}
             if XPBoostReminderDB.enabled == nil then XPBoostReminderDB.enabled = true end
             XPBoostReminderDB.items = XPBoostReminderDB.items or {} -- buff name -> item that gives it
+            XPBoostReminderDB.xpSpells = XPBoostReminderDB.xpSpells or {} -- spell ID -> experience line
         end
     elseif event == "PLAYER_REGEN_DISABLED" then
         -- Combat is starting: last chance to hide the buttons until it ends.
