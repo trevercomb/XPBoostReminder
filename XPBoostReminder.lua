@@ -430,13 +430,70 @@ local function InCombat()
     return InCombatLockdown() or UnitAffectingCombat("player")
 end
 
+-- On-screen warnings. Our own lines (styled like a raid warning) instead of
+-- the game's raid warning frame, so a dismissed reminder's text can be cleared
+-- at once rather than left fading out, and real raid warnings are untouched.
+local NOTICE_HOLD, NOTICE_FADE, NOTICE_GAP = 8, 2, 32
+local noticeFrame = CreateFrame("Frame", nil, UIParent)
+noticeFrame:SetSize(900, 1)
+noticeFrame:SetPoint("TOP", UIParent, "TOP", 0, -200)
+noticeFrame:SetFrameStrata("HIGH")
+local notices = {} -- key -> font string ("bag", or "buff:<name>")
+local noticeOrder = {}
+
+local function LayoutNotices()
+    local y = 0
+    for _, key in ipairs(noticeOrder) do
+        local line = notices[key]
+        if line:IsShown() then
+            line:ClearAllPoints()
+            line:SetPoint("TOP", noticeFrame, "TOP", 0, -y)
+            y = y + NOTICE_GAP
+        end
+    end
+end
+
+local function ShowNotice(key, text)
+    local line = notices[key]
+    if not line then
+        line = noticeFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+        local fade = line:CreateAnimationGroup()
+        local alpha = fade:CreateAnimation("Alpha")
+        alpha:SetFromAlpha(1)
+        alpha:SetToAlpha(0)
+        alpha:SetStartDelay(NOTICE_HOLD)
+        alpha:SetDuration(NOTICE_FADE)
+        fade:SetScript("OnFinished", function() line:Hide() LayoutNotices() end)
+        line.fade = fade
+        notices[key] = line
+        table.insert(noticeOrder, key)
+    end
+    local color = ChatTypeInfo and ChatTypeInfo["RAID_WARNING"] or { r = 1, g = 0.28, b = 0 }
+    line:SetTextColor(color.r, color.g, color.b)
+    line:SetText(text)
+    line.fade:Stop()
+    line:SetAlpha(1)
+    line:Show()
+    line.fade:Play()
+    LayoutNotices()
+end
+
+-- Clear a warning straight away (used when you dismiss its reminder).
+local function HideNotice(key)
+    local line = notices[key]
+    if line then
+        line.fade:Stop()
+        line:Hide()
+        LayoutNotices()
+    end
+end
+
+-- messages: list of { key = notice key, text = message }.
 local function Alert(messages, isTest)
     PlaySound(SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959, "Master")
     for _, msg in ipairs(messages) do
-        if RaidNotice_AddMessage and RaidWarningFrame then
-            RaidNotice_AddMessage(RaidWarningFrame, msg, ChatTypeInfo["RAID_WARNING"])
-        end
-        Print(msg .. (isTest and " |cff9d9d9d(test)|r" or ""))
+        ShowNotice(msg.key, msg.text)
+        Print(msg.text .. (isTest and " |cff9d9d9d(test)|r" or ""))
     end
 end
 
@@ -520,7 +577,11 @@ local function UpdateButtons()
 end
 
 bagButton:SetScript("PostClick", function(self, button)
-    if button == "RightButton" then bagDismissed = true UpdateButtons() end
+    if button == "RightButton" then
+        bagDismissed = true
+        HideNotice("bag")
+        UpdateButtons()
+    end
 end)
 foodButton:SetScript("PreClick", function(self, button)
     if button == "LeftButton" then NoteUse(self.itemID) end
@@ -528,6 +589,7 @@ end)
 foodButton:SetScript("PostClick", function(self, button)
     if button == "RightButton" and self.buffName and wornOff[self.buffName] then
         wornOff[self.buffName].dismissed = true
+        HideNotice("buff:" .. self.buffName)
         UpdateButtons()
     end
 end)
@@ -548,7 +610,7 @@ local function Check()
         for name, entry in pairs(wornOff) do
             if not entry.dismissed and entry.count < XP_REMINDERS and t >= entry.nextRemind then
                 entry.count, entry.nextRemind = entry.count + 1, t + REMIND_EVERY
-                table.insert(messages, WornOffMessage(name, entry))
+                table.insert(messages, { key = "buff:" .. name, text = WornOffMessage(name, entry) })
             end
         end
     end
@@ -573,7 +635,7 @@ local function Check()
                 wasDue, bagDismissed = false, false
             elseif (not wasDue or t >= nextRemind) and not blocked and not bagDismissed then
                 wasDue, nextRemind = true, t + REMIND_EVERY
-                table.insert(messages, msg)
+                table.insert(messages, { key = "bag", text = msg })
             end
         end
     end
@@ -641,7 +703,10 @@ SLASH_XPBOOSTREMINDER2 = "/xpboost"
 SlashCmdList.XPBOOSTREMINDER = function(input)
     local cmd = strtrim(input or ""):lower()
     if cmd == "test" then
-        Alert({ DEFAULT_MSG, "Well Fed (+5% XP) has worn off. Put it back up!" }, true)
+        Alert({
+            { key = "bag", text = DEFAULT_MSG },
+            { key = "buff:Well Fed", text = "Well Fed (+5% XP) has worn off. Put it back up!" },
+        }, true)
     elseif cmd == "status" then
         local ready = IsReady()
         Print((XPBoostReminderDB.enabled and "on" or "off") .. ", bag "
