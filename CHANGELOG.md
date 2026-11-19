@@ -1,5 +1,10 @@
 # XP Boost Reminder changelog
 
+## 1.0.4
+
+- Fixed: dismissing a reminder (right-click) left its warning text fading on screen for a few seconds. The text now clears at once.
+- The on-screen warnings no longer share the raid warning frame, so they don't mix with real raid warnings from your group.
+
 ## 1.0.3
 
 - Fixed: a Well Fed (or other XP buff) already running when you logged in could wear off without a reminder. Right after login the game may not have loaded the buff's description yet, and the addon took that as "not an XP buff" for the rest of the session. It now waits for the game's data, checks again later, and remembers your XP buffs between sessions.
